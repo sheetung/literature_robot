@@ -694,7 +694,10 @@ def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Pa
     title = page_title(body)
 
     body_lower = body.lower()
-    if any(kw in body_lower or kw in title.lower() for kw in CLOSED_KEYWORDS):
+    title_lower = title.lower()
+    title_closed = any(kw in title_lower for kw in CLOSED_KEYWORDS)
+    body_closed = any(kw in body for kw in {"已关闭", "已完结", "已结束", "已失效"})
+    if title_closed or body_closed:
         message = append_status_log(status_log, detail_url, title, "closed", "", "", 0)
         return MonitorResult(
             done=True,
