@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   author: sheetung
   name: literature_robot
-  repository: ''
+  repository: 'https://github.com/sheetung/literature_robot'
   version: 0.2.0
   description:
     en_US: Automatically resolve, request, monitor, and download papers

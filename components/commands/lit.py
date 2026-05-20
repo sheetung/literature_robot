@@ -45,10 +45,12 @@ RECORDS_FILE = "data/literature_robot/ablesci_records.json"
 
 
 class Lit(Command):
-    async def initialize(self):
-        await super().initialize()
+    def __init__(self):
+        super().__init__()
+        self._jobs_lock = asyncio.Lock()
+        self._monitor_tasks: dict[str, asyncio.Task] = {}
 
-        # 注册子命令必须先于任何可能出错的 async 调用，否则 * 通配符可能注册不上
+        # 在 __init__ 中注册子命令，确保命令立即可用（参考官方 demo 模式）
         @self.subcommand(
             name="",
             help="显示文献下载机器人帮助",
@@ -56,7 +58,6 @@ class Lit(Command):
             aliases=[],
         )
         async def lit_root(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            await self._flush_pending_notifications()
             debug("cmd=root")
             yield CommandReturn(text=self._help_text())
 
@@ -67,7 +68,6 @@ class Lit(Command):
             aliases=["h"],
         )
         async def lit_help(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            await self._flush_pending_notifications()
             debug("cmd=help")
             yield CommandReturn(text=self._help_text())
 
@@ -77,7 +77,6 @@ class Lit(Command):
             usage="!lit open <paper title>",
         )
         async def lit_open(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=open title={title!r}")
             if not title:
@@ -89,6 +88,7 @@ class Lit(Command):
                     platform_message.Plain(text=text),
                     platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
                 ]))
+                yield CommandReturn()
                 return
             yield CommandReturn(text=text)
 
@@ -111,6 +111,7 @@ class Lit(Command):
                     platform_message.Plain(text=text),
                     platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
                 ]))
+                yield CommandReturn()
                 return
             yield CommandReturn(text=text)
 
@@ -154,7 +155,6 @@ class Lit(Command):
             usage="!lit once <detail_url>",
         )
         async def lit_once(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            await self._flush_pending_notifications()
             cfg = self._config()
             debug(f"cmd=once detail_url={self._join_params(context.crt_params)!r}")
             access_error = self._access_error(context, cfg)
@@ -241,13 +241,18 @@ class Lit(Command):
                     platform_message.Plain(text=text),
                     platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
                 ]))
+                yield CommandReturn()
                 return
             yield CommandReturn(text=text)
 
-        # 所有子命令注册完成后，再做可能出错的初始化
-        self._jobs_lock = asyncio.Lock()
-        self._monitor_tasks: dict[str, asyncio.Task] = {}
+    async def initialize(self):
+        await super().initialize()
         await self._resume_jobs()
+
+    def __del__(self):
+        for task in self._monitor_tasks.values():
+            if not task.done():
+                task.cancel()
 
     # ========== 本地缓存（最多 CACHE_MAX_SIZE 篇）==========
 
