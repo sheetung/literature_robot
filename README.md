@@ -20,6 +20,7 @@ Literature Robot resolves a paper title, tries to download an open PDF first, an
 - `!lit monitor <detail_url>`: Monitor an existing AbleSci request page.
 - `!lit once <detail_url>`: Check one AbleSci request page immediately and try downloading attachments.
 - `!lit status`: Show background job status.
+- `!lit reset`: Clear all job records and local cache.
 - `!lit help`: Show help.
 
 Downloaded files are stored under `data/literature_robot/downloads` by default.
