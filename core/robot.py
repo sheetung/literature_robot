@@ -686,7 +686,7 @@ def append_status_log(
     return f"{timestamp},{detail_url},{page},{status},{file_path},{link_url},links={link_count}"
 
 
-CLOSED_KEYWORDS = {"已关闭", "closed", "已完结", "已结束", "已失效"}
+CLOSED_KEYWORDS = {"已关闭", "closed", "已失效"}
 
 
 def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Path, timeout: int) -> MonitorResult:
@@ -696,7 +696,7 @@ def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Pa
     body_lower = body.lower()
     title_lower = title.lower()
     title_closed = any(kw in title_lower for kw in CLOSED_KEYWORDS)
-    body_closed = any(kw in body for kw in {"已关闭", "已完结", "已结束", "已失效"})
+    body_closed = any(kw in body for kw in {"已关闭", "已失效"})
     if title_closed or body_closed:
         message = append_status_log(status_log, detail_url, title, "closed", "", "", 0)
         return MonitorResult(
