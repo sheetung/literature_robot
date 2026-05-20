@@ -12,7 +12,6 @@ from typing import Any, AsyncGenerator
 from langbot_plugin.api.definition.components.command.command import Command
 from langbot_plugin.api.entities.builtin.command.context import CommandReturn, ExecuteContext
 from langbot_plugin.api.entities.builtin.platform import message as platform_message
-from langbot_plugin.entities.io.actions.enums import PluginToRuntimeAction
 
 
 def debug(msg: str) -> None:
@@ -27,6 +26,7 @@ from core.robot import (  # noqa: E402
     Candidate,
     RobotConfig,
     candidate_summary,
+    load_records,
     monitor_once,
     publish_ablesci_request,
     resolve_plugin_path,
@@ -41,17 +41,14 @@ ACTIVE_STATUSES = {"waiting", "running"}
 CACHE_INDEX_FILE = "data/literature_robot/cache_index.json"
 CACHE_MAX_SIZE = 10
 CACHE_MATCH_THRESHOLD = 0.7
+RECORDS_FILE = "data/literature_robot/ablesci_records.json"
 
 
 class Lit(Command):
     async def initialize(self):
         await super().initialize()
 
-        self._handler = None
-        self._jobs_lock = asyncio.Lock()
-        self._monitor_tasks: dict[str, asyncio.Task] = {}
-        await self._resume_jobs()
-
+        # 注册子命令必须先于任何可能出错的 async 调用，否则 * 通配符可能注册不上
         @self.subcommand(
             name="",
             help="显示文献下载机器人帮助",
@@ -59,7 +56,6 @@ class Lit(Command):
             aliases=[],
         )
         async def lit_root(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             debug("cmd=root")
             yield CommandReturn(text=self._help_text())
@@ -71,7 +67,6 @@ class Lit(Command):
             aliases=["h"],
         )
         async def lit_help(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             debug("cmd=help")
             yield CommandReturn(text=self._help_text())
@@ -82,7 +77,6 @@ class Lit(Command):
             usage="!lit open <paper title>",
         )
         async def lit_open(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=open title={title!r}")
@@ -105,7 +99,6 @@ class Lit(Command):
             aliases=["req"],
         )
         async def lit_request(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=request title={title!r}")
@@ -140,7 +133,6 @@ class Lit(Command):
             if not cfg.cookie:
                 yield CommandReturn(text="请先在 WebUI 的 literature_robot 插件配置中填写科研通 Cookie。")
                 return
-            self._handler = context.plugin_runtime_handler
             await self._flush_pending_notifications()
             job = self._new_job(
                 title="手动监控任务",
@@ -162,7 +154,6 @@ class Lit(Command):
             usage="!lit once <detail_url>",
         )
         async def lit_once(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             cfg = self._config()
             debug(f"cmd=once detail_url={self._join_params(context.crt_params)!r}")
@@ -178,7 +169,7 @@ class Lit(Command):
                 yield CommandReturn(text="请先在 WebUI 的 literature_robot 插件配置中填写科研通 Cookie。")
                 return
             out_dir = resolve_plugin_path(PLUGIN_ROOT, cfg.download_dir)
-            status_log = resolve_plugin_path(PLUGIN_ROOT, cfg.status_log)
+            records_path = resolve_plugin_path(PLUGIN_ROOT, RECORDS_FILE)
             yield CommandReturn(text="正在检查科研通详情页并尝试下载附件。")
             try:
                 result = await asyncio.to_thread(
@@ -186,7 +177,7 @@ class Lit(Command):
                     detail_url,
                     cfg.cookie,
                     out_dir,
-                    status_log,
+                    records_path,
                     cfg.request_timeout_seconds,
                 )
             except Exception as exc:
@@ -207,7 +198,6 @@ class Lit(Command):
             aliases=["jobs", "list"],
         )
         async def lit_status(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             cfg = self._config()
             debug(f"cmd=status params={context.crt_params}")
@@ -239,7 +229,6 @@ class Lit(Command):
             aliases=[],
         )
         async def lit_title(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            self._handler = getattr(context, "plugin_runtime_handler", None)
             await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=title title={title!r}")
@@ -254,6 +243,11 @@ class Lit(Command):
                 ]))
                 return
             yield CommandReturn(text=text)
+
+        # 所有子命令注册完成后，再做可能出错的初始化
+        self._jobs_lock = asyncio.Lock()
+        self._monitor_tasks: dict[str, asyncio.Task] = {}
+        await self._resume_jobs()
 
     # ========== 本地缓存（最多 CACHE_MAX_SIZE 篇）==========
 
@@ -313,6 +307,23 @@ class Lit(Command):
                 debug(f"_search_cache: dir scan match score={best_score:.3f} path={best_path}")
                 # 加入缓存索引供后续快速查询
                 self._add_to_cache(Path(best_path).stem, best_path)
+
+        if not best_path:
+            # 仍没命中，查 科研通 下载记录（文件名可能与标题不匹配）
+            records_path = resolve_plugin_path(PLUGIN_ROOT, RECORDS_FILE)
+            if records_path.exists():
+                records = load_records(records_path)
+                for entry in records:
+                    fp = entry.get("file_path", "")
+                    entry_title = entry.get("title", "")
+                    if not fp or not entry_title or not Path(fp).exists():
+                        continue
+                    score = title_confidence(title, entry_title)
+                    if score > best_score:
+                        best_score = score
+                        best_path = fp
+                if best_path:
+                    debug(f"_search_cache: records match score={best_score:.3f} path={best_path}")
 
         if not best_path:
             debug(f"_search_cache: no match (best={best_score:.3f} < threshold={CACHE_MATCH_THRESHOLD})")
@@ -396,7 +407,6 @@ class Lit(Command):
         return None
 
     async def _handle_title(self, ctx: ExecuteContext, title: str, publish: bool) -> tuple[str, str | None]:
-        self._handler = getattr(ctx, "plugin_runtime_handler", None)
         cfg = self._config()
         access_error = self._access_error(ctx, cfg)
         if access_error:
@@ -627,7 +637,7 @@ class Lit(Command):
                 continue
 
             out_dir = resolve_plugin_path(PLUGIN_ROOT, cfg.download_dir)
-            status_log = resolve_plugin_path(PLUGIN_ROOT, cfg.status_log)
+            records_path = resolve_plugin_path(PLUGIN_ROOT, RECORDS_FILE)
             await self._update_job(job_id, status="running", last_checked_at=now, last_error="")
 
             debug(f"_monitor_job: {job_id} checking {job.get('detail_url','')}")
@@ -637,7 +647,7 @@ class Lit(Command):
                     str(job["detail_url"]),
                     cfg.cookie,
                     out_dir,
-                    status_log,
+                    records_path,
                     cfg.request_timeout_seconds,
                 )
                 debug(f"_monitor_job: {job_id} result done={result.done} status={result.status} links={result.link_count} file={result.file_path}")
@@ -695,10 +705,6 @@ class Lit(Command):
         self, job_id: str, job: dict[str, Any] | None,
         text: str, file_path: str | None = None,
     ) -> bool:
-        handler = self._handler
-        if handler is None:
-            debug(f"_send_notification: no handler, deferring for {job_id}")
-            return False
         bot_uuid = (job or {}).get("notify_bot_uuid", "")
         target_type = (job or {}).get("notify_target_type", "")
         target_id = (job or {}).get("notify_target_id", "")
@@ -719,14 +725,11 @@ class Lit(Command):
                 platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
             )
         try:
-            await handler.call_action(
-                PluginToRuntimeAction.SEND_MESSAGE,
-                {
-                    "bot_uuid": bot_uuid,
-                    "target_type": target_type,
-                    "target_id": target_id,
-                    "message_chain": platform_message.MessageChain(chain).model_dump(mode="json"),
-                },
+            await self.plugin.send_message(
+                bot_uuid=bot_uuid,
+                target_type=target_type,
+                target_id=target_id,
+                message_chain=platform_message.MessageChain(chain),
             )
             debug(f"_send_notification: sent for {job_id}")
             return True
@@ -736,8 +739,6 @@ class Lit(Command):
 
 
     async def _flush_pending_notifications(self) -> None:
-        if self._handler is None:
-            return
         jobs = await self._load_jobs()
         changed = False
         for job_id, job in list(jobs.items()):

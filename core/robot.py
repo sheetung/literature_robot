@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import html
 import json
 import logging
@@ -62,7 +61,6 @@ class RobotConfig:
     search_rows: int = 10
     open_pdf_confidence: float = 0.86
     download_dir: str = "data/literature_robot/downloads"
-    status_log: str = "data/literature_robot/ablesci_monitor_log.csv"
     proxy: str = ""
     allowed_user_ids: set[str] = field(default_factory=set)
     allowed_group_ids: set[str] = field(default_factory=set)
@@ -81,7 +79,6 @@ class RobotConfig:
             search_rows=as_int(data.get("search_rows"), 10, minimum=1),
             open_pdf_confidence=as_float(data.get("open_pdf_confidence"), 0.86, minimum=0.0, maximum=1.0),
             download_dir=str(data.get("download_dir") or "data/literature_robot/downloads"),
-            status_log=str(data.get("status_log") or "data/literature_robot/ablesci_monitor_log.csv"),
             proxy=str(data.get("proxy") or ""),
             allowed_user_ids=split_values(data.get("allowed_user_ids")),
             allowed_group_ids=split_values(data.get("allowed_group_ids")),
@@ -666,30 +663,47 @@ def download_ablesci_link(url: str, name: str, cookie: str, out_dir: Path, timeo
     return str(output), "downloaded"
 
 
-def append_status_log(
-    status_log: Path,
-    detail_url: str,
-    page: str,
-    status: str,
-    file_path: str,
-    link_url: str,
-    link_count: int,
-) -> str:
-    status_log.parent.mkdir(parents=True, exist_ok=True)
-    exists = status_log.exists()
+def extract_detail_id(detail_url: str) -> str:
+    match = re.search(r'[?&]id=([^&]+)', detail_url)
+    return match.group(1) if match else ""
+
+
+def load_records(records_path: Path) -> list[dict[str, Any]]:
+    if not records_path.exists():
+        return []
+    try:
+        return json.loads(records_path.read_text("utf-8"))
+    except Exception:
+        return []
+
+
+def save_record(records_path: Path, detail_url: str, page_title: str, status: str, file_path: str = "") -> str:
+    records_path.parent.mkdir(parents=True, exist_ok=True)
+    records = load_records(records_path)
+    record_id = extract_detail_id(detail_url)
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    with status_log.open("a", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.writer(handle)
-        if not exists:
-            writer.writerow(["time", "detail_url", "page_title", "status", "file_path", "link_url", "link_count"])
-        writer.writerow([timestamp, detail_url, page, status, file_path, link_url, link_count])
-    return f"{timestamp},{detail_url},{page},{status},{file_path},{link_url},links={link_count}"
+    clean_title = re.sub(r'^【[^】]+】\s*', '', page_title).replace(' - 科研通', '').strip()
+    record = {
+        "id": record_id,
+        "title": clean_title,
+        "file_path": file_path,
+        "status": status,
+        "timestamp": timestamp,
+    }
+    for i, r in enumerate(records):
+        if r.get("id") == record_id:
+            records[i] = record
+            break
+    else:
+        records.append(record)
+    records_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), "utf-8")
+    return f"{timestamp} id={record_id} status={status} title={clean_title}" + (f" file={file_path}" if file_path else "")
 
 
 CLOSED_KEYWORDS = {"已关闭", "closed", "已失效"}
 
 
-def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Path, timeout: int) -> MonitorResult:
+def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, records_path: Path, timeout: int) -> MonitorResult:
     body = fetch_text(detail_url, cookie, timeout)
     title = page_title(body)
 
@@ -698,7 +712,7 @@ def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Pa
     title_closed = any(kw in title_lower for kw in CLOSED_KEYWORDS)
     body_closed = any(kw in body for kw in {"已关闭", "已失效"})
     if title_closed or body_closed:
-        message = append_status_log(status_log, detail_url, title, "closed", "", "", 0)
+        save_record(records_path, detail_url, title, "closed")
         return MonitorResult(
             done=True,
             status="closed",
@@ -708,17 +722,16 @@ def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Pa
         )
 
     links = extract_download_links(body, detail_url)
-    message = append_status_log(status_log, detail_url, title, "waiting", "", "", len(links))
     for link in links:
         if "/assist/download" not in link["url"] and "pdf" not in link["url"].lower():
             continue
         file_path, status = download_ablesci_link(link["url"], link["name"], cookie, out_dir, timeout)
-        message = append_status_log(status_log, detail_url, title, status, file_path, link["url"], len(links))
         if status in {"downloaded", "already_exists"}:
+            save_record(records_path, detail_url, title, status, file_path)
             return MonitorResult(
                 done=True,
                 status=status,
-                message=message,
+                message=f"文件：{file_path}",
                 page_title=title,
                 file_path=file_path,
                 link_url=link["url"],
@@ -729,15 +742,15 @@ def run_monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Pa
     return MonitorResult(
         done=False,
         status="waiting",
-        message=message,
+        message=f"扫描到 {len(links)} 个链接，暂无可下载 PDF。",
         page_title=title,
         link_count=len(links),
     )
 
 
-def monitor_once(detail_url: str, cookie: str, out_dir: Path, status_log: Path, timeout: int) -> MonitorResult:
+def monitor_once(detail_url: str, cookie: str, out_dir: Path, records_path: Path, timeout: int) -> MonitorResult:
     accept_available_files(detail_url, cookie, timeout)
-    return run_monitor_once(detail_url, cookie, out_dir, status_log, timeout)
+    return run_monitor_once(detail_url, cookie, out_dir, records_path, timeout)
 
 
 def try_open_download(
