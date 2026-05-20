@@ -17,7 +17,7 @@ metadata:
     th_TH: Literature Robot
     vi_VN: Literature Robot
     es_ES: Literature Robot
-  icon: assets/icon.svg
+  icon: assets/lit.png
 spec:
   config:
     - name: enabled

@@ -93,29 +93,6 @@ class Lit(Command):
             yield CommandReturn(text=text)
 
         @self.subcommand(
-            name="request",
-            help="查询文献；找不到开放 PDF 时发布科研通求助并后台监控",
-            usage="!lit request <paper title>",
-            aliases=["req"],
-        )
-        async def lit_request(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
-            await self._flush_pending_notifications()
-            title = self._join_params(context.crt_params)
-            debug(f"cmd=request title={title!r}")
-            if not title:
-                yield CommandReturn(text="用法：!lit request <论文标题>")
-                return
-            text, file_path = await self._handle_title(context, title, publish=True)
-            if file_path:
-                await context.reply(platform_message.MessageChain([
-                    platform_message.Plain(text=text),
-                    platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
-                ]))
-                yield CommandReturn()
-                return
-            yield CommandReturn(text=text)
-
-        @self.subcommand(
             name="monitor",
             help="把已有科研通求助详情页加入后台监控",
             usage="!lit monitor <detail_url>",
@@ -221,6 +198,31 @@ class Lit(Command):
             lines = ["literature_robot 最近任务："]
             lines.extend(self._format_job_line(job) for job in recent)
             yield CommandReturn(text="\n".join(lines))
+
+        @self.subcommand(
+            name="reset",
+            help="清空所有任务记录和缓存",
+            usage="!lit reset",
+        )
+        async def lit_reset(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            cfg = self._config()
+            access_error = self._access_error(context, cfg)
+            if access_error:
+                yield CommandReturn(text=access_error)
+                return
+            # 停掉所有监控任务
+            for job_id, task in list(self._monitor_tasks.items()):
+                if not task.done():
+                    task.cancel()
+            self._monitor_tasks.clear()
+            # 清空数据库中的 jobs
+            await self._save_jobs({})
+            # 清空缓存索引
+            cache_path = self._cache_index_path()
+            if cache_path.exists():
+                cache_path.unlink()
+            debug("cmd=reset: cleared all jobs, tasks, and cache")
+            yield CommandReturn(text="已清空所有任务记录、监控任务和本地缓存。")
 
         @self.subcommand(
             name="*",
@@ -364,10 +366,10 @@ class Lit(Command):
             "用法：\n"
             "  !lit <论文标题>                 - 查开放 PDF；找不到则发布科研通求助并后台监控\n"
             "  !lit open <论文标题>            - 只尝试开放 PDF 下载\n"
-            "  !lit request <论文标题>         - 显式执行完整流程\n"
             "  !lit monitor <详情页URL>        - 监控已有科研通求助\n"
             "  !lit once <详情页URL>           - 立即检查一次详情页并下载附件\n"
             "  !lit status                     - 查看后台任务\n"
+            "  !lit reset                     - 清空所有任务记录和缓存\n"
             "  !lit help                       - 显示帮助\n"
             "请在 WebUI 插件配置中填写科研通 Cookie；默认悬赏点数也在 WebUI 配置。"
         )

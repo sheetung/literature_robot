@@ -17,7 +17,6 @@ Literature Robot resolves a paper title, tries to download an open PDF first, an
 
 - `!lit <paper title>`: Search open sources first. If no trusted PDF is found, publish an AbleSci request and start background monitoring.
 - `!lit open <paper title>`: Only try open-PDF download.
-- `!lit request <paper title>`: Explicitly run the full workflow.
 - `!lit monitor <detail_url>`: Monitor an existing AbleSci request page.
 - `!lit once <detail_url>`: Check one AbleSci request page immediately and try downloading attachments.
 - `!lit status`: Show background job status.
@@ -31,7 +30,7 @@ The plugin caches the last 10 downloaded papers. Before making any network reque
 
 ## Background Monitoring
 
-When `!lit request` or `!lit <title>` publishes an AbleSci request, the plugin periodically checks the request page in the background, accepts uploaded files, and downloads the PDF. If the request is manually closed on AbleSci (showing "已关闭" / "closed"), monitoring stops automatically and a notification is sent.
+When `!lit <title>` publishes an AbleSci request, the plugin periodically checks the request page in the background, accepts uploaded files, and downloads the PDF. If the request is manually closed on AbleSci (showing "已关闭" / "closed"), monitoring stops automatically and a notification is sent.
 
 ## Security Notes
 
