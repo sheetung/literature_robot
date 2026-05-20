@@ -3,8 +3,8 @@ kind: Plugin
 metadata:
   author: sheetung
   name: literature_robot
-  repository: 'https://github.com/sheetung/literature_robot'
-  version: 0.2.0
+  repository: https://github.com/sheetung/literature_robot
+  version: 0.3.4
   description:
     en_US: Automatically resolve, request, monitor, and download papers
     zh_Hans: 文献自动下载与科研通求助插件
@@ -20,71 +20,78 @@ metadata:
   icon: assets/lit.png
 spec:
   config:
-    - name: enabled
-      type: boolean
-      label:
-        en_US: Enabled
-        zh_Hans: 是否启用
-      required: true
-      default: true
-    - name: ablesci_cookie
-      type: text
-      label:
-        en_US: AbleSci Cookie
-        zh_Hans: 科研通 Cookie
-      description:
-        en_US: Raw Cookie header copied from a logged-in ablesci.com browser session. Required when publishing or monitoring requests.
-        zh_Hans: 从已登录 www.ablesci.com 的浏览器复制完整 Cookie 请求头。发布求助和监控下载时必填。
-      required: false
-      default: ''
-    - name: auto_publish
-      type: boolean
-      label:
-        en_US: Auto publish request
-        zh_Hans: 找不到开放 PDF 时自动发布求助
-      required: true
-      default: true
-    - name: default_points
-      type: integer
-      label:
-        en_US: Default bounty points
-        zh_Hans: 默认悬赏点数
-      required: true
-      default: 30
-    - name: proxy
-      type: string
-      label:
-        en_US: HTTP proxy
-        zh_Hans: HTTP 代理
-      description:
-        en_US: Proxy for public literature sources (e.g. http://127.0.0.1:7890). AbleSci requests do NOT use proxy.
-        zh_Hans: 公开文献查询使用的代理（如 http://127.0.0.1:7890）。科研通请求不走代理。
-      required: false
-      default: ''
-    - name: allowed_user_ids
-      type: string
-      label:
-        en_US: Allowed user IDs
-        zh_Hans: 允许用户 ID
-      description:
-        en_US: Optional allowlist. Separate IDs with commas, spaces, semicolons, or new lines. Empty means all users.
-        zh_Hans: 可选白名单。多个 ID 可用逗号、空格、分号或换行分隔。留空表示不限制用户。
-      required: false
-      default: ''
-    - name: allowed_group_ids
-      type: string
-      label:
-        en_US: Allowed group IDs
-        zh_Hans: 允许群 ID
-      description:
-        en_US: Optional group allowlist. Empty means all groups.
-        zh_Hans: 可选群白名单。留空表示不限制群。
-      required: false
-      default: ''
+  - name: enabled
+    type: boolean
+    label:
+      en_US: Enabled
+      zh_Hans: 是否启用
+    required: true
+    default: true
+  - name: ablesci_cookie
+    type: text
+    label:
+      en_US: AbleSci Cookie
+      zh_Hans: 科研通 Cookie
+    description:
+      en_US: Raw Cookie header copied from a logged-in ablesci.com browser session.
+        Required when publishing or monitoring requests.
+      zh_Hans: 从已登录 www.ablesci.com 的浏览器复制完整 Cookie 请求头。发布求助和监控下载时必填。
+    required: false
+    default: ''
+  - name: auto_publish
+    type: boolean
+    label:
+      en_US: Auto publish request
+      zh_Hans: 找不到开放 PDF 时自动发布求助
+    required: true
+    default: true
+  - name: default_points
+    type: integer
+    show_if:
+      field: auto_publish
+      operator: eq
+      value: true
+    label:
+      en_US: Default bounty points
+      zh_Hans: 默认悬赏点数
+    required: true
+    default: 30
+  - name: proxy
+    type: string
+    label:
+      en_US: HTTP proxy
+      zh_Hans: HTTP 代理
+    description:
+      en_US: Proxy for public literature sources (e.g. http://127.0.0.1:7890). AbleSci
+        requests do NOT use proxy.
+      zh_Hans: 公开文献查询使用的代理（如 http://127.0.0.1:7890）。科研通请求不走代理。
+    required: false
+    default: ''
+  - name: allowed_user_ids
+    type: string
+    label:
+      en_US: Allowed user IDs
+      zh_Hans: 允许用户 ID
+    description:
+      en_US: Optional allowlist. Separate IDs with commas, spaces, semicolons, or
+        new lines. Empty means all users.
+      zh_Hans: 可选白名单。多个 ID 可用逗号、空格、分号或换行分隔。留空表示不限制用户。
+    required: false
+    default: ''
+  - name: allowed_group_ids
+    type: string
+    label:
+      en_US: Allowed group IDs
+      zh_Hans: 允许群 ID
+    description:
+      en_US: Optional group allowlist. Empty means all groups.
+      zh_Hans: 可选群白名单。留空表示不限制群。
+    required: false
+    default: ''
   components:
-    Command:
+    EventListener:
       fromDirs:
-      - path: components/commands/
+      - path: components/event_listener/
 execution:
   python:
     path: main.py
