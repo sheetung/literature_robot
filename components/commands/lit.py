@@ -59,6 +59,8 @@ class Lit(Command):
             aliases=[],
         )
         async def lit_root(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             debug("cmd=root")
             yield CommandReturn(text=self._help_text())
 
@@ -69,6 +71,8 @@ class Lit(Command):
             aliases=["h"],
         )
         async def lit_help(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             debug("cmd=help")
             yield CommandReturn(text=self._help_text())
 
@@ -78,6 +82,8 @@ class Lit(Command):
             usage="!lit open <paper title>",
         )
         async def lit_open(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=open title={title!r}")
             if not title:
@@ -99,6 +105,8 @@ class Lit(Command):
             aliases=["req"],
         )
         async def lit_request(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=request title={title!r}")
             if not title:
@@ -133,6 +141,7 @@ class Lit(Command):
                 yield CommandReturn(text="请先在 WebUI 的 literature_robot 插件配置中填写科研通 Cookie。")
                 return
             self._handler = context.plugin_runtime_handler
+            await self._flush_pending_notifications()
             job = self._new_job(
                 title="手动监控任务",
                 detail_url=detail_url,
@@ -153,6 +162,8 @@ class Lit(Command):
             usage="!lit once <detail_url>",
         )
         async def lit_once(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             cfg = self._config()
             debug(f"cmd=once detail_url={self._join_params(context.crt_params)!r}")
             access_error = self._access_error(context, cfg)
@@ -196,6 +207,8 @@ class Lit(Command):
             aliases=["jobs", "list"],
         )
         async def lit_status(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             cfg = self._config()
             debug(f"cmd=status params={context.crt_params}")
             access_error = self._access_error(context, cfg)
@@ -226,6 +239,8 @@ class Lit(Command):
             aliases=[],
         )
         async def lit_title(cmd, context: ExecuteContext) -> AsyncGenerator[CommandReturn, None]:
+            self._handler = getattr(context, "plugin_runtime_handler", None)
+            await self._flush_pending_notifications()
             title = self._join_params(context.crt_params)
             debug(f"cmd=title title={title!r}")
             if not title:
@@ -638,6 +653,8 @@ class Lit(Command):
                 if result.done:
                     if result.status == "closed":
                         debug(f"_monitor_job: {job_id} closed")
+                        closed_text = "监控任务已停止：该科研通求助已关闭。"
+                        sent = await self._send_notification(job_id, job, text=closed_text)
                         await self._update_job(
                             job_id,
                             status="closed",
@@ -645,10 +662,12 @@ class Lit(Command):
                             last_message=result.message,
                             link_count=result.link_count,
                             last_error="",
+                            pending_notification=None if sent else json.dumps({"text": closed_text}),
                         )
-                        await self._send_closed_notification(job_id, job, result)
                         return
                     debug(f"_monitor_job: {job_id} completed file={result.file_path}")
+                    dl_text = "科研通 PDF 已下载。"
+                    sent = await self._send_notification(job_id, job, text=dl_text, file_path=result.file_path)
                     await self._update_job(
                         job_id,
                         status=result.status,
@@ -657,6 +676,7 @@ class Lit(Command):
                         file_path=result.file_path,
                         link_count=result.link_count,
                         last_error="",
+                        pending_notification=None if sent else json.dumps({"text": dl_text, "file_path": result.file_path}),
                     )
                     return
                 await self._update_job(
@@ -671,30 +691,33 @@ class Lit(Command):
             remaining = max(1, deadline - int(time.time()))
             await asyncio.sleep(min(cfg.monitor_interval_seconds, remaining))
 
-    async def _send_closed_notification(
-        self, job_id: str, job: dict[str, Any] | None, result: Any
-    ) -> None:
+    async def _send_notification(
+        self, job_id: str, job: dict[str, Any] | None,
+        text: str, file_path: str | None = None,
+    ) -> bool:
         handler = self._handler
         if handler is None:
-            debug(f"_send_closed_notification: no handler, skipping notification for {job_id}")
-            return
+            debug(f"_send_notification: no handler, deferring for {job_id}")
+            return False
         bot_uuid = (job or {}).get("notify_bot_uuid", "")
         target_type = (job or {}).get("notify_target_type", "")
         target_id = (job or {}).get("notify_target_id", "")
         if not bot_uuid or not target_type or not target_id:
-            debug(f"_send_closed_notification: missing notify fields for {job_id}")
-            return
+            debug(f"_send_notification: missing notify fields for {job_id}")
+            return False
         title = (job or {}).get("title", "")
         detail_url = (job or {}).get("detail_url", "")
-        text = (
-            f"监控任务已停止：该科研通求助已关闭。\n"
+        msg_text = (
+            f"{text}\n"
             f"任务ID：{job_id}\n"
             f"标题：{title}\n"
             f"详情页：{detail_url}"
         )
-        chain = platform_message.MessageChain([
-            platform_message.Plain(text=text),
-        ])
+        chain = [platform_message.Plain(text=msg_text)]
+        if file_path:
+            chain.append(
+                platform_message.File(url=f"file://{file_path}", name=Path(file_path).name),
+            )
         try:
             await handler.call_action(
                 PluginToRuntimeAction.SEND_MESSAGE,
@@ -702,12 +725,39 @@ class Lit(Command):
                     "bot_uuid": bot_uuid,
                     "target_type": target_type,
                     "target_id": target_id,
-                    "message_chain": chain.model_dump(mode="json"),
+                    "message_chain": platform_message.MessageChain(chain).model_dump(mode="json"),
                 },
             )
-            debug(f"_send_closed_notification: sent for {job_id}")
+            debug(f"_send_notification: sent for {job_id}")
+            return True
         except Exception as exc:
-            debug(f"_send_closed_notification: failed for {job_id}: {exc}")
+            debug(f"_send_notification: failed for {job_id}: {exc}")
+            return False
+
+
+    async def _flush_pending_notifications(self) -> None:
+        if self._handler is None:
+            return
+        jobs = await self._load_jobs()
+        changed = False
+        for job_id, job in list(jobs.items()):
+            raw = job.get("pending_notification")
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                continue
+            sent = await self._send_notification(
+                job_id, job,
+                text=data.get("text", ""),
+                file_path=data.get("file_path"),
+            )
+            if sent:
+                job.pop("pending_notification", None)
+                changed = True
+        if changed:
+            await self._save_jobs(jobs)
 
     def _format_time(self, timestamp: Any) -> str:
         try:
